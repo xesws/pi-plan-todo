@@ -1,6 +1,6 @@
-import { HOOK_ENTRY_TYPE } from "./schema.ts";
+import { HOOK_ENTRY_TYPE, NOTEPAD_PROMOTE_TOOL } from "./schema.ts";
 import type { BranchEntry } from "./state.ts";
-import { isSuccessfulTodoWrite, userMessageText } from "./state.ts";
+import { isSuccessfulPromote, isSuccessfulTodoWrite, userMessageText } from "./state.ts";
 
 export const PLAN_MODE_STATE_TYPE = "plan-mode-state";
 
@@ -13,13 +13,16 @@ export const IMPLEMENT_HANDOFF_PREFIXES = [
 export const HISTORY_IMPLEMENT_PROMPT = "Implement the plan.";
 
 export const TODO_STEER_BANNER =
-	"[pi-plan-todo] First tool call MUST be todo_write with the complete step list from the approved plan (exactly one in_progress, rest pending). Do not edit files before todo_write succeeds.";
+	"[pi-plan-todo] First tool call MUST be todo_write (or notepad_promote when continuing from Notepad) with the complete step list from the approved plan (exactly one in_progress, rest pending). Do not edit files before todo_write/notepad_promote succeeds.";
 
 export const HOOK_MESSAGE =
-	"Plan 已批准。先调用 `todo_write` 提交完整步骤（第一条 `in_progress`，其余 `pending`），再改代码。每完成一步就全量更新列表。";
+	"Plan 已批准。先调用 `todo_write` 提交完整步骤（第一条 `in_progress`，其余 `pending`），再改代码。若本次是从右侧 Notepad 转执行，可改调 `notepad_promote`（按 id 或 topic 选 resolved 子集，append/replace 写入 todos）。每完成一步就全量更新列表。";
 
 export const SYSTEM_STEER = `## pi-plan-todo (required)
-The todo_write tool is available. Your first tool call this turn MUST be todo_write with a complete list of implementation steps from the approved plan. Use exactly one in_progress item; the rest pending. Do not call edit, write, or bash until todo_write has succeeded. After each step, call todo_write again with the full updated list.`;
+The todo_write and notepad_promote tools are available. Your first tool call this turn MUST be todo_write with a complete list of implementation steps from the approved plan (or notepad_promote when promoting a resolved Notepad subset: ids or topics/partitionKeys, mode append|replace). Use exactly one in_progress item; the rest pending. Do not call edit, write, or bash until todo_write/notepad_promote has succeeded. After each step, call todo_write again with the full updated list.
+
+## pi-plan-notepad (divergent discussion)
+Notepad holds future todos: notepad_add / notepad_update / notepad_remove are granular and safe to allow in Plan-mode policy (/plan tools) for divergent discussion. Each note needs topic (+ optional partitionKey/priority); marking resolved requires designDoc. notepad_promote and todo_write stay blocked during Plan mode and run only after Implement.`;
 
 export function stripTodoBanner(text: string): string {
 	const trimmed = text.trimStart();
@@ -95,7 +98,16 @@ export function findPendingSteer(
 export function hasSuccessfulTodoWriteAfter(entries: BranchEntry[], startIndex: number): boolean {
 	for (let index = startIndex + 1; index < entries.length; index += 1) {
 		const entry = entries[index];
-		if (entry?.type === "message" && isSuccessfulTodoWrite(entry.message)) return true;
+		if (entry?.type !== "message") continue;
+		// Promote writes todos too, so it also satisfies the Implement steering gate.
+		if (isSuccessfulTodoWrite(entry.message) || isSuccessfulPromote(entry.message)) {
+			// Promote must carry a todos snapshot to count; todo_write always does.
+			if (entry.message?.toolName === NOTEPAD_PROMOTE_TOOL) {
+				const details = entry.message?.details as { todos?: unknown } | undefined;
+			if (!Array.isArray(details?.todos)) continue;
+		}
+			return true;
+		}
 	}
 	return false;
 }
